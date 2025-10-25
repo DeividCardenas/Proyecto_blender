@@ -8,9 +8,13 @@ export default class LevelManager {
     nextLevel() {
         if (this.currentLevel < this.totalLevels) {
             this.currentLevel++;
-    
             this.experience.world.clearCurrentScene();
-            this.experience.world.loadLevel(this.currentLevel);
+            // Use loadManager if available so user sees loading state and can retry
+            if (this.experience.loadManager && typeof this.experience.loadManager.loadLevel === 'function') {
+                this.experience.loadManager.loadLevel(this.currentLevel)
+            } else {
+                this.experience.world.loadLevel(this.currentLevel)
+            }
     
             // Espera breve para que el nivel se cargue y luego reubicar al robot
             setTimeout(() => {
@@ -22,7 +26,11 @@ export default class LevelManager {
 
     resetLevel() {
         this.currentLevel = 1;
-        this.experience.world.loadLevel(this.currentLevel);
+        if (this.experience.loadManager && typeof this.experience.loadManager.loadLevel === 'function') {
+            this.experience.loadManager.loadLevel(this.currentLevel)
+        } else {
+            this.experience.world.loadLevel(this.currentLevel)
+        }
     }
 
 

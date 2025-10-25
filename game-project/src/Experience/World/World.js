@@ -2,28 +2,29 @@ import * as THREE from 'three'
 import Environment from './Environment.js'
 import Fox from './Fox.js'
 import Robot from './Robot.js'
-import ToyCarLoader from '../../loaders/ToyCarLoader.js'
 import Floor from './Floor.js'
 import ThirdPersonCamera from './ThirdPersonCamera.js'
 import Sound from './Sound.js'
 import AmbientSound from './AmbientSound.js'
 import MobileControls from '../../controls/MobileControls.js'
 import LevelManager from './LevelManager.js';
-import BlockPrefab from './BlockPrefab.js'
 import FinalPrizeParticles from '../Utils/FinalPrizeParticles.js'
 import Enemy from './Enemy.js'
+import ToyCarLoader from '../../loaders/ToyCarLoader.js'
 
 
 export default class World {
     constructor(experience) {
         this.experience = experience
         this.scene = this.experience.scene
-        this.blockPrefab = new BlockPrefab(this.experience)
         this.resources = this.experience.resources
         this.levelManager = new LevelManager(this.experience);
         this.finalPrizeActivated = false
         this.gameStarted = false
         this.enemies = []
+    // Placeholder loader object to avoid runtime errors if specific loader implementation
+    // (e.g., ToyCarLoader) is missing or was removed. Real loader will overwrite this when available.
+    this.loader = { prizes: [] }
 
         this.coinSound = new Sound('/sounds/coin.ogg')
         this.ambientSound = new AmbientSound('/sounds/ambiente.mp3')
@@ -42,9 +43,6 @@ export default class World {
         this.resources.on('ready', async () => {
             this.floor = new Floor(this.experience)
             this.environment = new Environment(this.experience)
-
-            this.loader = new ToyCarLoader(this.experience)
-            await this.loader.loadFromAPI()
 
             this.fox = new Fox(this.experience)
             this.robot = new Robot(this.experience)
@@ -217,19 +215,24 @@ export default class World {
                         if (finalCoin && !finalCoin.collected && finalCoin.pivot) {
                             finalCoin.pivot.visible = true
                             if (finalCoin.model) finalCoin.model.visible = true
-                            this.finalPrizeActivated = true
+                            this.finalPrizeActivated = false
+                            this.gameStarted = false
+                            this.enemies = []
 
-                            new FinalPrizeParticles({
-                                scene: this.scene,
-                                targetPosition: finalCoin.pivot.position,
-                                sourcePosition: this.robot.body.position,
-                                experience: this.experience
-                            })
+                            // Sonidos
+                            this.coinSound = new Sound('/sounds/coin.ogg')
+                            this.ambientSound = new AmbientSound('/sounds/ambiente.mp3')
+                            this.winner = new Sound('/sounds/winner.mp3')
+                            this.portalSound = new Sound('/sounds/portal.mp3')
+                            this.loseSound = new Sound('/sounds/lose.ogg')
 
-                            // Faro visual
-                            this.discoRaysGroup = new THREE.Group()
-                            this.scene.add(this.discoRaysGroup)
-
+                            // Instanciar el loader específico (ToyCarLoader). El loader gestionará this.prizes
+                            try {
+                                this.loader = new ToyCarLoader(this.experience, this)
+                            } catch {
+                                // En caso de fallo, asegurar estructura mínima
+                                this.loader = { prizes: [] }
+                            }
                             const rayMaterial = new THREE.MeshBasicMaterial({
                                 color: 0xaa00ff,
                                 transparent: true,
@@ -283,19 +286,10 @@ export default class World {
                         this.experience.tracker.saveTime(elapsed)
                         this.experience.tracker.showEndGameModal(elapsed)
 
-                        this.experience.obstacleWavesDisabled = true
-                        clearTimeout(this.experience.obstacleWaveTimeout)
-                        this.experience.raycaster?.removeAllObstacles()
-
                         if (window.userInteracted) {
                             this.winner.play()
                         }
                     }
-                }
-
-                if (this.experience.raycaster?.removeRandomObstacles) {
-                    const reduction = 0.2 + Math.random() * 0.1
-                    this.experience.raycaster.removeRandomObstacles(reduction)
                 }
 
                 if (window.userInteracted) {
@@ -417,7 +411,7 @@ export default class World {
                 }
                 data = await res.json();
                 console.log(`📦 Datos del nivel ${level} cargados desde API`);
-            } catch (error) {
+            } catch {
                 console.warn(`⚠️ No se pudo conectar con el backend. Usando datos locales para nivel ${level}...`);
                 const publicPath = (p) => {
                     const base = import.meta.env.BASE_URL || '/';
@@ -452,23 +446,10 @@ export default class World {
             this.experience.menu.setStatus?.(`🎖️ Puntos: ${this.points}`);
 
             if (data.blocks) {
-                const publicPath = (p) => {
-                    const base = import.meta.env.BASE_URL || '/';
-                    return `${base.replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
-                };
-                const preciseUrl = publicPath('config/precisePhysicsModels.json');
-                const preciseRes = await fetch(preciseUrl);
-                if (!preciseRes.ok) {
-                    const preview = (await preciseRes.text()).slice(0, 120);
-                    throw new Error(`No se pudo cargar ${preciseUrl} (HTTP ${preciseRes.status}). Vista previa: ${preview}`);
+                // Delegate processing to the loader (it will fetch/process precise models as needed)
+                if (typeof this.loader._processBlocks === 'function') {
+                    await this.loader._processBlocks(data.blocks);
                 }
-                const preciseCt = preciseRes.headers.get('content-type') || '';
-                if (!preciseCt.includes('application/json')) {
-                    const preview = (await preciseRes.text()).slice(0, 120);
-                    throw new Error(`Contenido no JSON en ${preciseUrl}. Vista previa: ${preview}`);
-                }
-                const preciseModels = await preciseRes.json();
-                this.loader._processBlocks(data.blocks, preciseModels);
             } else {
                 await this.loader.loadFromURL(apiUrl);
             }
@@ -614,9 +595,10 @@ export default class World {
     }
 
     async _processLocalBlocks(blocks) {
-        const preciseRes = await fetch('/config/precisePhysicsModels.json');
-        const preciseModels = await preciseRes.json();
-        this.loader._processBlocks(blocks, preciseModels);
+        // Delegate to loader implementation (it may fetch precise models itself)
+        if (typeof this.loader._processBlocks === 'function') {
+            await this.loader._processBlocks(blocks);
+        }
 
         this.loader.prizes.forEach(p => {
             if (p.model) p.model.visible = (p.role !== 'finalPrize');

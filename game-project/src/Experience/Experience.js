@@ -10,7 +10,6 @@ import World from './World/World.js'
 import Resources from './Utils/Resources.js'
 import sources from './sources.js'
 import Sounds from './World/Sound.js'
-import Raycaster from './Utils/Raycaster.js'
 import KeyboardControls from './Utils/KeyboardControls.js'
 import GameTracker from './Utils/GameTracker.js'
 import Physics from './Utils/Physics.js'
@@ -18,6 +17,7 @@ import cannonDebugger from 'cannon-es-debugger'
 import CircularMenu from '../controls/CircularMenu.js'
 import { Howler } from 'howler'
 import SocketManager from '../network/SocketManager.js'
+import LoadManager from './Utils/LoadManager.js'
 
 let instance = null
 
@@ -79,14 +79,6 @@ export default class Experience {
     this.vrDolly.add(this.camera.instance)
     this.scene.add(this.vrDolly)
 
-
-    // Socket
-    //this.socketManager = new SocketManager(this)
-
-    // Raycaster
-    this.raycaster = new Raycaster(this)
-
-
     // Modal y VR
     this.modal = new ModalManager({ container: document.body })
     this.vr = new VRIntegration({
@@ -117,11 +109,6 @@ export default class Experience {
       onCancelGame: () => this.tracker.handleCancelGame() // 🔴 aquí se integra la lógica central
     })
 
-    //Generar obstaculos
-    this._startObstacleWaves()
-
-
-
     // Activar tiempos
     if (this.tracker) {
       this.tracker.destroy()
@@ -132,6 +119,9 @@ export default class Experience {
 
     // Mundo
     this.world = new World(this)
+
+  // Load manager (muestra modal mientras se cargan niveles/recursos)
+  this.loadManager = new LoadManager(this)
 
     // Flag tercera persona
     this.isThirdPerson = false
@@ -244,43 +234,6 @@ export default class Experience {
     }
   }
 
-  //Generar olas de cubos
-  _startObstacleWaves() {
-    this.obstacleWaveCount = 10
-    this.maxObstacles = 50
-    this.currentObstacles = []
-    const delay = 30000
-
-    const spawnWave = () => {
-      if (this.obstacleWavesDisabled) return
-
-      for (let i = 0; i < this.obstacleWaveCount; i++) {
-        const obstacle = this.raycaster.generateRandomObstacle?.()
-        if (obstacle) {
-          this.currentObstacles.push(obstacle)
-        }
-      }
-
-      // Mantener máximo 50 obstáculos
-      while (this.currentObstacles.length > this.maxObstacles) {
-        const oldest = this.currentObstacles.shift()
-        if (oldest) {
-          // Usar el removedor centralizado para desregistrar tick y liberar recursos
-          this.raycaster._removeObstacle(oldest)
-        }
-      }
-
-      // Mantener constante el tamaño de la oleada para evitar crecimiento exponencial
-      // this.obstacleWaveCount += 10
-      this.obstacleWaveTimeout = setTimeout(spawnWave, delay)
-    }
-
-    // Inicia primera oleada tras 30s
-    this.obstacleWaveTimeout = setTimeout(spawnWave, 30000)
-  }
-
-
-
   destroy() {
     this.sizes.off('resize')
     this.time.off('tick')
@@ -305,8 +258,9 @@ export default class Experience {
   startGame() {
     console.log('🎮 Juego iniciado')
     this.isThirdPerson = true // ⬅️ asegurar el modo
-    this.tracker.start()
-    this._startObstacleWaves()
+    if (this.tracker) {
+      this.tracker.start()
+    }
     if (this.menu && this.menu.toggleButton && this.menu.toggleButton.style) {
       this.menu.toggleButton.style.display = 'block'
     }
@@ -355,7 +309,7 @@ export default class Experience {
   }
 
 
-  resetGameToFirstLevel() {
+  async resetGameToFirstLevel() {
     console.log('♻️ Reiniciando al nivel');
 
     // 💀 Destruir enemigo previo si existe
@@ -369,8 +323,8 @@ export default class Experience {
 
     // Resetear variables de World
     this.world.points = 0;
-    this.world.robot.points = 0;
-    this.world.loader.prizes = [];
+    if (this.world.robot) this.world.robot.points = 0;
+    if (this.world.loader) this.world.loader.prizes = [];
     this.world.defeatTriggered = false
 
     // Resetear nivel actual
@@ -379,8 +333,12 @@ export default class Experience {
     // Limpiar la escena
     this.world.clearCurrentScene();
 
-    // Cargar nivel 1 de nuevo
-    this.world.loadLevel(1);
+    // Cargar nivel 1 de nuevo a través del LoadManager (muestra UI y retries)
+    if (this.loadManager && typeof this.loadManager.loadLevel === 'function') {
+      this.loadManager.loadLevel(1)
+    } else {
+      this.world.loadLevel(1)
+    }
 
     // Reiniciar el seguimiento de tiempo
     this.tracker.destroy(); // Detener el loop anterior
